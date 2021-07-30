@@ -1,418 +1,325 @@
-#!/usr/bin/env python3
 
-import json
-import platform
+
+# !/usr/bin/env python3
 import os
-from time import time, monotonic
+from itertools import cycle
+from pathlib import Path
 import cv2
-import numpy as np
-import depthai
-from depthai_helpers.version_check import check_depthai_version
-from depthai_helpers.object_tracker_handler import show_tracklets
-from depthai_helpers.config_manager import DepthConfigManager
-from depthai_helpers.arg_manager import CliArgs
+import depthai as dai
 
-print('Using depthai module from: ', depthai.__file__)
-print('Depthai version installed: ', depthai.__version__)
+# for disha modules
+from openal import *
+import time
+import math
+
+from depthai_helpers.managers import NNetManager, PreviewManager, FPSHandler, PipelineManager, Previews, EncodingManager
+from depthai_helpers.version_check import check_depthai_version
+import platform
+
+from depthai_helpers.arg_manager import parse_args
+from depthai_helpers.config_manager import ConfigManager
+from depthai_helpers.utils import frame_norm, to_planar, to_tensor_result, load_module
+
+DISP_CONF_MIN = int(os.getenv("DISP_CONF_MIN", 0))
+DISP_CONF_MAX = int(os.getenv("DISP_CONF_MAX", 255))
+SIGMA_MIN = int(os.getenv("SIGMA_MIN", 0))
+SIGMA_MAX = int(os.getenv("SIGMA_MAX", 250))
+LRCT_MIN = int(os.getenv("LRCT_MIN", 0))
+LRCT_MAX = int(os.getenv("LRCT_MAX", 10))
+
+
+
+
+
+print('Using depthai module from: ', dai.__file__)
+print('Depthai version installed: ', dai.__version__)
 if platform.machine() not in ['armv6l', 'aarch64']:
     check_depthai_version()
 
-is_rpi = platform.machine().startswith('arm') or platform.machine().startswith('aarch64')
-global args, cnn_model2
+conf = ConfigManager(parse_args())
+conf.linuxCheckApplyUsbRules()
+if not conf.useCamera and str(conf.args.video).startswith('https'):
+    conf.downloadYTVideo()
+conf.adjustPreviewToOptions()
+
+callbacks = load_module(conf.args.callback)
+rgb_res = conf.getRgbResolution()
+mono_res = conf.getMonoResolution()
 
 
-class DepthAI:
-    global is_rpi
-    process_watchdog_timeout = 10  # seconds
-    nnet_packets = None
-    data_packets = None
-    runThread = True
+disp_multiplier = 255 / conf.maxDisparity
 
-    def reset_process_wd(self):
-        global wd_cutoff
-        wd_cutoff = monotonic() + self.process_watchdog_timeout
-        return
 
-    def on_trackbar_change(self, value):
-        self.device.send_disparity_confidence_threshold(value)
-        return
+if conf.args.report_file:
+    report_file_p = Path(conf.args.report_file).with_suffix('.csv')
+    report_file_p.parent.mkdir(parents=True, exist_ok=True)
+    report_file = open(conf.args.report_file, 'a')
 
-    def stopLoop(self):
-        self.runThread = False
-
-    def startLoop(self):
-        cliArgs = CliArgs()
-        args = vars(cliArgs.parse_args())
-
-        configMan = DepthConfigManager(args)
-        if is_rpi and args['pointcloud']:
-            raise NotImplementedError("Point cloud visualization is currently not supported on RPI")
-        # these are largely for debug and dev.
-        cmd_file, debug_mode = configMan.getCommandFile()
-        usb2_mode = configMan.getUsb2Mode()
-
-        # decode_nn and show_nn are functions that are dependent on the neural network that's being run.
-        decode_nn = configMan.decode_nn
-        show_nn = configMan.show_nn
-
-        # Labels for the current neural network. They are parsed from the blob config file.
-        labels = configMan.labels
-        NN_json = configMan.NN_config
-
-        # This json file is sent to DepthAI. It communicates what options you'd like to enable and what model you'd like to run.
-        config = configMan.jsonConfig
-
-        # Create a list of enabled streams ()
-        stream_names = [stream if isinstance(stream, str) else stream['name'] for stream in configMan.stream_list]
-
-        enable_object_tracker = 'object_tracker' in stream_names
-
-        # grab video file, if option exists
-        video_file = configMan.video_file
-
-        self.device = None
-        if debug_mode:
-            print('Cmd file: ', cmd_file, ' args["device_id"]: ', args['device_id'])
-            self.device = depthai.Device(cmd_file, args['device_id'])
-        else:
-            self.device = depthai.Device(args['device_id'], usb2_mode)
-
-        print(stream_names)
-        print('Available streams: ' + str(self.device.get_available_streams()))
-
-        # create the pipeline, here is the first connection with the device
-        p = self.device.create_pipeline(config=config)
-
-        if p is None:
-            print('Pipeline is not created.')
-            exit(3)
-
-        nn2depth = self.device.get_nn_to_depth_bbox_mapping()
-
-        t_start = time()
-        frame_count = {}
-        frame_count_prev = {}
-        nnet_prev = {}
-        nnet_prev["entries_prev"] = {}
-        nnet_prev["nnet_source"] = {}
-        frame_count['nn'] = {}
-        frame_count_prev['nn'] = {}
-
-        NN_cams = {'rgb', 'left', 'right'}
-
-        for cam in NN_cams:
-            nnet_prev["entries_prev"][cam] = None
-            nnet_prev["nnet_source"][cam] = None
-            frame_count['nn'][cam] = 0
-            frame_count_prev['nn'][cam] = 0
-
-        stream_windows = []
-        for s in stream_names:
-            if s == 'previewout':
-                for cam in NN_cams:
-                    stream_windows.append(s + '-' + cam)
-            else:
-                stream_windows.append(s)
-
-        for w in stream_windows:
-            frame_count[w] = 0
-            frame_count_prev[w] = 0
-
-        tracklets = None
-
-        self.reset_process_wd()
-
-        time_start = time()
-
-        def print_packet_info_header():
-            print('[hostTimestamp streamName] devTstamp seq camSrc width height Bpp')
-
-        def print_packet_info(packet, stream_name):
-            meta = packet.getMetadata()
-            print("[{:.6f} {:15s}]".format(time() - time_start, stream_name), end='')
-            if meta is not None:
-                source = meta.getCameraName()
-                if stream_name.startswith('disparity') or stream_name.startswith('depth'):
-                    source += '(rectif)'
-                print(" {:.6f}".format(meta.getTimestamp()), meta.getSequenceNum(), source, end='')
-                print('', meta.getFrameWidth(), meta.getFrameHeight(), meta.getFrameBytesPP(), end='')
-            print()
-            return
-
-        def keypress_handler(self, key, stream_names):
-            cams = ['rgb', 'mono']
-            self.cam_idx = getattr(self, 'cam_idx', 0)  # default: 'rgb'
-            cam = cams[self.cam_idx]
-            cam_c = depthai.CameraControl.CamId.RGB
-            cam_l = depthai.CameraControl.CamId.LEFT
-            cam_r = depthai.CameraControl.CamId.RIGHT
-            cmd_ae_region = depthai.CameraControl.Command.AE_REGION
-            cmd_exp_comp  = depthai.CameraControl.Command.EXPOSURE_COMPENSATION
-            cmd_set_focus = depthai.CameraControl.Command.MOVE_LENS
-            cmd_set_exp   = depthai.CameraControl.Command.AE_MANUAL
-            keypress_handler_lut = {
-                ord('f'): lambda: self.device.request_af_trigger(),
-                ord('1'): lambda: self.device.request_af_mode(depthai.AutofocusMode.AF_MODE_AUTO),
-                ord('2'): lambda: self.device.request_af_mode(depthai.AutofocusMode.AF_MODE_CONTINUOUS_VIDEO),
-                # 5,6,7,8,9,0: short example for using ISP 3A controls for Mono cameras
-                ord('5'): lambda: self.device.send_camera_control(cam_l, cmd_ae_region, '0 0 200 200 1'),
-                ord('6'): lambda: self.device.send_camera_control(cam_l, cmd_ae_region, '1000 0 200 200 1'),
-                ord('7'): lambda: self.device.send_camera_control(cam_l, cmd_exp_comp, '-2'),
-                ord('8'): lambda: self.device.send_camera_control(cam_l, cmd_exp_comp, '+2'),
-                ord('9'): lambda: self.device.send_camera_control(cam_r, cmd_exp_comp, '-2'),
-                ord('0'): lambda: self.device.send_camera_control(cam_r, cmd_exp_comp, '+2'),
+def print_sys_info(info):
+    m = 1024 * 1024 # MiB
+    if not conf.args.report_file:
+        if "memory" in conf.args.report:
+            print(f"Drr used / total - {info.ddrMemoryUsage.used / m:.2f} / {info.ddrMemoryUsage.total / m:.2f} MiB")
+            print(f"Cmx used / total - {info.cmxMemoryUsage.used / m:.2f} / {info.cmxMemoryUsage.total / m:.2f} MiB")
+            print(f"LeonCss heap used / total - {info.leonCssMemoryUsage.used / m:.2f} / {info.leonCssMemoryUsage.total / m:.2f} MiB")
+            print(f"LeonMss heap used / total - {info.leonMssMemoryUsage.used / m:.2f} / {info.leonMssMemoryUsage.total / m:.2f} MiB")
+        if "temp" in conf.args.report:
+            t = info.chipTemperature
+            print(f"Chip temperature - average: {t.average:.2f}, css: {t.css:.2f}, mss: {t.mss:.2f}, upa0: {t.upa:.2f}, upa1: {t.dss:.2f}")
+        if "cpu" in conf.args.report:
+            print(f"Cpu usage - Leon OS: {info.leonCssCpuUsage.average * 100:.2f}%, Leon RT: {info.leonMssCpuUsage.average * 100:.2f} %")
+        print("----------------------------------------")
+    else:
+        data = {}
+        if "memory" in conf.args.report:
+            data = {
+                **data,
+                "ddr_used": info.ddrMemoryUsage.used,
+                "ddr_total": info.ddrMemoryUsage.total,
+                "cmx_used": info.cmxMemoryUsage.used,
+                "cmx_total": info.cmxMemoryUsage.total,
+                "leon_css_used": info.leonCssMemoryUsage.used,
+                "leon_css_total": info.leonCssMemoryUsage.total,
+                "leon_mss_used": info.leonMssMemoryUsage.used,
+                "leon_mss_total": info.leonMssMemoryUsage.total,
             }
-            if key in keypress_handler_lut:
-                keypress_handler_lut[key]()
-            elif key == ord('c'):
-                if 'jpegout' in stream_names:
-                    self.device.request_jpeg()
-                else:
-                    print("'jpegout' stream not enabled. Try settings -s jpegout to enable it")
-            elif key == ord('s'):  # switch selected camera for manual exposure control
-                self.cam_idx = (self.cam_idx + 1) % len(cams)
-                print("======================= Current camera to control:", cams[self.cam_idx])
-            # RGB manual focus/exposure controls:
-            # Control:      key[dec/inc]  min..max
-            # exposure time:     i   o    1..33333 [us]
-            # sensitivity iso:   k   l    100..1600
-            # focus:             ,   .    0..255 [far..near]
-            elif key == ord('i') or key == ord('o') or key == ord('k') or key == ord('l'):
-                max_exp_us = int(1000*1000 / config['camera'][cam]['fps'])
-                self.rgb_exp = getattr(self, 'rgb_exp', 20000)  # initial
-                self.rgb_iso = getattr(self, 'rgb_iso', 800)  # initial
-                rgb_iso_step = 50
-                rgb_exp_step = max_exp_us // 20  # split in 20 steps
-                if key == ord('i'): self.rgb_exp -= rgb_exp_step
-                if key == ord('o'): self.rgb_exp += rgb_exp_step
-                if key == ord('k'): self.rgb_iso -= rgb_iso_step
-                if key == ord('l'): self.rgb_iso += rgb_iso_step
-                if self.rgb_exp < 1:     self.rgb_exp = 1
-                if self.rgb_exp > max_exp_us: self.rgb_exp = max_exp_us
-                if self.rgb_iso < 100:   self.rgb_iso = 100
-                if self.rgb_iso > 1600:  self.rgb_iso = 1600
-                print("===================================", cam, "set exposure:", self.rgb_exp, "iso:", self.rgb_iso)
-                exp_arg = str(self.rgb_exp) + ' ' + str(self.rgb_iso) + ' 33333'
-                if cam == 'rgb':
-                    self.device.send_camera_control(cam_c, cmd_set_exp, exp_arg)
-                elif cam == 'mono':
-                    self.device.send_camera_control(cam_l, cmd_set_exp, exp_arg)
-                    self.device.send_camera_control(cam_r, cmd_set_exp, exp_arg)
-            elif key == ord(',') or key == ord('.'):
-                self.rgb_manual_focus = getattr(self, 'rgb_manual_focus', 200)  # initial
-                rgb_focus_step = 3
-                if key == ord(','): self.rgb_manual_focus -= rgb_focus_step
-                if key == ord('.'): self.rgb_manual_focus += rgb_focus_step
-                if self.rgb_manual_focus < 0:   self.rgb_manual_focus = 0
-                if self.rgb_manual_focus > 255: self.rgb_manual_focus = 255
-                print("========================================== RGB set focus:", self.rgb_manual_focus)
-                focus_arg = str(self.rgb_manual_focus)
-                self.device.send_camera_control(cam_c, cmd_set_focus, focus_arg)
-            return
+        if "temp" in conf.args.report:
+            data = {
+                **data,
+                "temp_avg": info.chipTemperature.average,
+                "temp_css": info.chipTemperature.css,
+                "temp_mss": info.chipTemperature.mss,
+                "temp_upa0": info.chipTemperature.upa,
+                "temp_upa1": info.chipTemperature.dss,
+            }
+        if "cpu" in conf.args.report:
+            data = {
+                **data,
+                "cpu_css_avg": info.leonCssCpuUsage.average,
+                "cpu_mss_avg": info.leonMssCpuUsage.average,
+            }
 
-        for stream in stream_names:
-            if stream in ["disparity", "disparity_color", "depth"]:
-                cv2.namedWindow(stream)
-                trackbar_name = 'Disparity confidence'
-                conf_thr_slider_min = 0
-                conf_thr_slider_max = 255
-                cv2.createTrackbar(trackbar_name, stream, conf_thr_slider_min, conf_thr_slider_max, self.on_trackbar_change)
-                cv2.setTrackbarPos(trackbar_name, stream, args['disparity_confidence_threshold'])
+        if report_file.tell() == 0:
+            print(','.join(data.keys()), file=report_file)
+        callbacks.on_report(data)
+        print(','.join(map(str, data.values())), file=report_file)
 
-        right_rectified = None
-        pcl_converter = None
 
-        ops = 0
-        prevTime = time()
-        if args['verbose']: print_packet_info_header()
-        while self.runThread:
-            # retreive data from the device
-            # data is stored in packets, there are nnet (Neural NETwork) packets which have additional functions for NNet result interpretation
-            self.nnet_packets, self.data_packets = p.get_available_nnet_and_data_packets(blocking=True)
+class Trackbars:
+    instances = {}
 
-            ### Uncomment to print ops
-            # ops = ops + 1
-            # if time() - prevTime > 1.0:
-            #     print('OPS: ', ops)
-            #     ops = 0
-            #     prevTime = time()
+    @staticmethod
+    def create_trackbar(name, window, min_val, max_val, default_val, callback):
+        def fn(value):
+            if Trackbars.instances[name][window] != value:
+                callback(value)
+            for other_window, previous_value in Trackbars.instances[name].items():
+                if other_window != window and previous_value != value:
+                    Trackbars.instances[name][other_window] = value
+                    cv2.setTrackbarPos(name, other_window, value)
 
-            packets_len = len(self.nnet_packets) + len(self.data_packets)
-            if packets_len != 0:
-                self.reset_process_wd()
+        cv2.createTrackbar(name, window, min_val, max_val, fn)
+        Trackbars.instances[name] = {**Trackbars.instances.get(name, {}), window: default_val}
+        cv2.setTrackbarPos(name, window, default_val)
+
+device_info = conf.getDeviceInfo()
+openvino_version = None
+if conf.args.openvino_version:
+    openvino_version = getattr(dai.OpenVINO.Version, 'VERSION_' + conf.args.openvino_version)
+pm = PipelineManager(openvino_version)
+
+if conf.useNN:
+    nn_manager = NNetManager(
+        input_size=conf.inputSize,
+        model_name=conf.getModelName(),
+        model_dir=conf.getModelDir(),
+        source=conf.getModelSource(),
+        full_fov=conf.args.full_fov_nn or not conf.useCamera,
+        flip_detection=conf.getModelSource() in ("rectified_left", "rectified_right") and not conf.args.stereo_lr_check
+    )
+    nn_manager.count_label = conf.getCountLabel(nn_manager)
+    pm.set_nn_manager(nn_manager)
+
+# Pipeline is defined, now we can connect to the device
+with dai.Device(pm.p.getOpenVINOVersion(), device_info, usb2Mode=conf.args.usb_speed == "usb2") as device:
+    conf.adjustParamsToDevice(device)
+    cap = cv2.VideoCapture(conf.args.video) if not conf.useCamera else None
+    fps = FPSHandler() if conf.useCamera else FPSHandler(cap)
+
+    if conf.useCamera or conf.args.sync:
+        pv = PreviewManager(fps, display=conf.args.show, colorMap=conf.getColorMap(), disp_multiplier=disp_multiplier, mouseTracker=True)
+
+        if conf.leftCameraEnabled:
+            pm.create_left_cam(mono_res, conf.args.mono_fps)
+        if conf.rightCameraEnabled:
+            pm.create_right_cam(mono_res, conf.args.mono_fps)
+        if conf.rgbCameraEnabled:
+            pm.create_color_cam(nn_manager.input_size if conf.useNN else conf.previewSize, rgb_res, conf.args.rgb_fps, conf.args.full_fov_nn, conf.useHQ)
+
+        if conf.useDepth:
+            pm.create_depth(
+                conf.args.disparity_confidence_threshold,
+                conf.getMedianFilter(),
+                conf.args.sigma,
+                conf.args.stereo_lr_check,
+                conf.args.lrc_threshold,
+                conf.args.extended_disparity,
+                conf.args.subpixel,
+                useDepth=Previews.depth.name in conf.args.show or Previews.depth_raw.name in conf.args.show,
+                useDisparity=Previews.disparity.name in conf.args.show or Previews.disparity_color.name in conf.args.show,
+                useRectifiedLeft=Previews.rectified_left.name in conf.args.show,
+                useRectifiedRight=Previews.rectified_right.name in conf.args.show,
+            )
+
+        enc_manager = EncodingManager(pm, dict(conf.args.encode), conf.args.encode_output) if len(conf.args.encode) > 0 else None
+
+    if len(conf.args.report) > 0:
+        pm.create_system_logger()
+
+    if conf.useNN:
+        nn_pipeline = nn_manager.create_nn_pipeline(pm.p, pm.nodes, shaves=conf.args.shaves, use_depth=conf.useDepth,
+                                                    use_sbb=conf.args.spatial_bounding_box and conf.useDepth,
+                                                    minDepth=conf.args.min_depth, maxDepth=conf.args.max_depth,
+                                                    sbbScaleFactor=conf.args.sbb_scale_factor)
+        pm.create_nn(nn=nn_pipeline, sync=conf.args.sync)
+
+    # Start pipeline
+    device.startPipeline(pm.p)
+    pm.create_default_queues(device)
+    nn_in = device.getInputQueue(nn_manager.input_name, maxSize=1, blocking=False) if not conf.useCamera and conf.useNN else None
+    nn_out = device.getOutputQueue(nn_manager.output_name, maxSize=1, blocking=False) if conf.useNN else None
+
+    sbb_out = device.getOutputQueue("sbb", maxSize=1, blocking=False) if conf.useNN and nn_manager.sbb else None
+    log_out = device.getOutputQueue("system_logger", maxSize=30, blocking=False) if len(conf.args.report) > 0 else None
+
+    median_filters = cycle([item for name, item in vars(dai.MedianFilter).items() if name.startswith('KERNEL_') or name.startswith('MEDIAN_')])
+    for med_filter in median_filters:
+        # move the cycle to the current median filter
+        if med_filter == pm.depthConfig.getMedianFilter():
+            break
+
+    if conf.useCamera:
+        def create_queue_callback(queue_name):
+            if queue_name in [Previews.disparity_color.name, Previews.disparity.name, Previews.depth.name, Previews.depth_raw.name]:
+                Trackbars.create_trackbar('Disparity confidence', queue_name, DISP_CONF_MIN, DISP_CONF_MAX, conf.args.disparity_confidence_threshold,
+                         lambda value: pm.update_depth_config(device, dct=value))
+                if queue_name in [Previews.depth_raw.name, Previews.depth.name]:
+                    Trackbars.create_trackbar('Bilateral sigma', queue_name, SIGMA_MIN, SIGMA_MAX, conf.args.sigma,
+                             lambda value: pm.update_depth_config(device, sigma=value))
+                if conf.args.stereo_lr_check:
+                    Trackbars.create_trackbar('LR-check threshold', queue_name, LRCT_MIN, LRCT_MAX, conf.args.lrc_threshold,
+                             lambda value: pm.update_depth_config(device, lrc_threshold=value))
+        pv.create_queues(device, create_queue_callback)
+        if enc_manager is not None:
+            enc_manager.create_default_queues(device)
+    elif conf.args.sync:
+        host_out = device.getOutputQueue(Previews.host.name, maxSize=1, blocking=False)
+
+    seq_num = 0
+    host_frame = None
+    nn_data = []
+    sbb_rois = []
+    callbacks.on_setup(**locals())
+
+    try:
+        while True:
+            fps.next_iter()
+            callbacks.on_iter(**locals())
+            if conf.useCamera:
+                pv.prepare_frames(callback=callbacks.on_new_frame)
+                if enc_manager is not None:
+                    enc_manager.parse_queues()
+
+                if sbb_out is not None:
+                    sbb = sbb_out.tryGet()
+                    if sbb is not None:
+                        sbb_rois = sbb.getConfigData()
+                    depth_frames = [pv.get(Previews.depth_raw.name), pv.get(Previews.depth.name)]
+                    for depth_frame in depth_frames:
+                        if depth_frame is None:
+                            continue
+
+                        for roi_data in sbb_rois:
+                            roi = roi_data.roi.denormalize(depth_frame.shape[1], depth_frame.shape[0])
+                            top_left = roi.topLeft()
+                            bottom_right = roi.bottomRight()
+                            # Display SBB on the disparity map
+                            cv2.rectangle(depth_frame, (int(top_left.x), int(top_left.y)), (int(bottom_right.x), int(bottom_right.y)), nn_manager.bbox_color[0], cv2.FONT_HERSHEY_SCRIPT_SIMPLEX)
             else:
-                cur_time = monotonic()
-                if cur_time > wd_cutoff:
-                    print("process watchdog timeout")
-                    os._exit(10)
+                read_correctly, host_frame = cap.read()
+                if not read_correctly:
+                    break
 
-            for _, nnet_packet in enumerate(self.nnet_packets):
-                if args['verbose']: print_packet_info(nnet_packet, 'NNet')
+                if nn_in is not None:
+                    scaled_frame = cv2.resize(host_frame, nn_manager.input_size)
+                    frame_nn = dai.ImgFrame()
+                    frame_nn.setSequenceNum(seq_num)
+                    frame_nn.setType(dai.ImgFrame.Type.BGR888p)
+                    frame_nn.setWidth(nn_manager.input_size[0])
+                    frame_nn.setHeight(nn_manager.input_size[1])
+                    frame_nn.setData(to_planar(scaled_frame))
+                    nn_in.send(frame_nn)
+                    seq_num += 1
 
-                meta = nnet_packet.getMetadata()
-                camera = 'rgb'
-                if meta != None:
-                    camera = meta.getCameraName()
-                nnet_prev["nnet_source"][camera] = nnet_packet
-                nnet_prev["entries_prev"][camera] = decode_nn(nnet_packet, config=config, NN_json=NN_json)
-                frame_count['metaout'] += 1
-                frame_count['nn'][camera] += 1
+                    # if high quality, send original frames
+                    if not conf.useHQ:
+                        host_frame = scaled_frame
+                fps.tick('host')
 
-            for packet in self.data_packets:
-                window_name = packet.stream_name
-                if packet.stream_name not in stream_names:
-                    continue  # skip streams that were automatically added
-                if args['verbose']: print_packet_info(packet, packet.stream_name)
-                packetData = packet.getData()
-                if packetData is None:
-                    print('Invalid packet data!')
-                    continue
-                elif packet.stream_name == 'previewout':
-                    meta = packet.getMetadata()
-                    camera = 'rgb'
-                    if meta != None:
-                        camera = meta.getCameraName()
+            if nn_out is not None:
+                in_nn = nn_out.tryGet()
+                if in_nn is not None:
+                    callbacks.on_nn(in_nn)
+                    if not conf.useCamera and conf.args.sync:
+                        host_frame = Previews.host.value(host_out.get())
+                    nn_data = nn_manager.decode(in_nn)
+                    fps.tick('nn')
 
-                    window_name = 'previewout-' + camera
-                    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-                    # the format of previewout image is CHW (Chanel, Height, Width), but OpenCV needs HWC, so we
-                    # change shape (3, 300, 300) -> (300, 300, 3)
-                    data0 = packetData[0, :, :]
-                    data1 = packetData[1, :, :]
-                    data2 = packetData[2, :, :]
-                    frame = cv2.merge([data0, data1, data2])
-                    if nnet_prev["entries_prev"][camera] is not None:
-                        frame = show_nn(nnet_prev["entries_prev"][camera], frame, NN_json=NN_json, config=config)
-                        if enable_object_tracker and tracklets is not None:
-                            frame = show_tracklets(tracklets, frame, labels)
-                    cv2.putText(frame, "fps: " + str(frame_count_prev[window_name]), (25, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 0))
-                    cv2.putText(frame, "NN fps: " + str(frame_count_prev['nn'][camera]), (2, frame.shape[0] - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0))
-                    cv2.imshow(window_name, frame)
-                elif packet.stream_name in ['left', 'right', 'disparity', 'rectified_left', 'rectified_right']:
-                    frame_bgr = packetData
-                    if args['pointcloud'] and packet.stream_name == 'rectified_right':
-                        right_rectified = packetData
-                    cv2.putText(frame_bgr, packet.stream_name, (25, 25), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 0))
-                    cv2.putText(frame_bgr, "fps: " + str(frame_count_prev[window_name]), (25, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 0))
-                    if args['draw_bb_depth']:
-                        camera = args['cnn_camera']
-                        if packet.stream_name == 'disparity':
-                            if camera == 'left_right':
-                                camera = 'right'
-                        elif camera != 'rgb':
-                            camera = packet.getMetadata().getCameraName()
-                        if nnet_prev["entries_prev"][camera] is not None:
-                            frame_bgr = show_nn(nnet_prev["entries_prev"][camera], frame_bgr, NN_json=NN_json, config=config, nn2depth=nn2depth)
-                    cv2.imshow(window_name, frame_bgr)
-                elif packet.stream_name.startswith('depth') or packet.stream_name == 'disparity_color':
-                    frame = packetData
+            if conf.useCamera:
+                if conf.useNN:
+                    nn_manager.draw(pv, nn_data)
+                fps.draw_fps(pv)
 
-                    if len(frame.shape) == 2:
-                        if frame.dtype == np.uint8:  # grayscale
-                            cv2.putText(frame, packet.stream_name, (25, 25), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255))
-                            cv2.putText(frame, "fps: " + str(frame_count_prev[window_name]), (25, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255))
-                        else:  # uint16
-                            if args['pointcloud'] and "depth" in stream_names and "rectified_right" in stream_names and right_rectified is not None:
-                                try:
-                                    from depthai_helpers.projector_3d import PointCloudVisualizer
-                                except ImportError as e:
-                                    raise ImportError(f"\033[1;5;31mError occured when importing PCL projector: {e} \033[0m ")
-                                if pcl_converter is None:
-                                    pcl_converter = PointCloudVisualizer(self.device.get_right_intrinsic(), 1280, 720)
-                                right_rectified = cv2.flip(right_rectified, 1)
-                                pcl_converter.rgbd_to_projection(frame, right_rectified)
-                                pcl_converter.visualize_pcd()
+                def show_frames_callback(frame, name):
+                    if name in [Previews.disparity_color.name, Previews.disparity.name, Previews.depth.name, Previews.depth_raw.name]:
+                        h, w = frame.shape[:2]
+                        text = "Median filter: {} [M]".format(pm.depthConfig.getMedianFilter().name.lstrip("KERNEL_").lstrip("MEDIAN_"))
+                        text_config = {
+                            "fontFace": cv2.FONT_HERSHEY_TRIPLEX,
+                            "fontScale": 0.4,
+                            "thickness": 1
+                        }
+                        text_w = cv2.getTextSize(text, **text_config)[0][0]
+                        cv2.rectangle(frame, (0, h - 30), (text_w + 20, h), (255, 255, 255), cv2.FILLED)
+                        cv2.putText(frame, text, (10, h - 10), color=fps.fps_color, **text_config)
+                        return_frame = callbacks.on_show_frame(frame, name)
+                        return return_frame if return_frame is not None else frame
+                pv.show_frames(scale=conf.args.scale, callback=show_frames_callback)
+            else:
+                if conf.useNN:
+                    nn_manager.draw(host_frame, nn_data)
+                fps.draw_fps(host_frame)
+                cv2.imshow("host", host_frame)
 
-                            frame = (65535 // frame).astype(np.uint8)
-                            # colorize depth map, comment out code below to obtain grayscale
-                            frame = cv2.applyColorMap(frame, cv2.COLORMAP_HOT)
-                            # frame = cv2.applyColorMap(frame, cv2.COLORMAP_JET)
-                            cv2.putText(frame, packet.stream_name, (25, 25), cv2.FONT_HERSHEY_SIMPLEX, 1.0, 255)
-                            cv2.putText(frame, "fps: " + str(frame_count_prev[window_name]), (25, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.0, 255)
-                    else:  # bgr
-                        cv2.putText(frame, packet.stream_name, (25, 25), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255))
-                        cv2.putText(frame, "fps: " + str(frame_count_prev[window_name]), (25, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.0, 255)
-
-                    if args['draw_bb_depth']:
-                        camera = args['cnn_camera']
-                        if camera == 'left_right':
-                            camera = 'right'
-                        if nnet_prev["entries_prev"][camera] is not None:
-                            frame = show_nn(nnet_prev["entries_prev"][camera], frame, NN_json=NN_json, config=config, nn2depth=nn2depth)
-                    cv2.imshow(window_name, frame)
-
-                elif packet.stream_name == 'jpegout':
-                    jpg = packetData
-                    mat = cv2.imdecode(jpg, cv2.IMREAD_COLOR)
-                    cv2.imshow('jpegout', mat)
-
-                elif packet.stream_name == 'video':
-                    videoFrame = packetData
-                    videoFrame.tofile(video_file)
-                    # mjpeg = packetData
-                    # mat = cv2.imdecode(mjpeg, cv2.IMREAD_COLOR)
-                    # cv2.imshow('mjpeg', mat)
-                elif packet.stream_name == 'color':
-                    meta = packet.getMetadata()
-                    w = meta.getFrameWidth()
-                    h = meta.getFrameHeight()
-                    yuv420p = packetData.reshape((h * 3 // 2, w))
-                    bgr = cv2.cvtColor(yuv420p, cv2.COLOR_YUV2BGR_IYUV)
-                    scale = configMan.getColorPreviewScale()
-                    bgr = cv2.resize(bgr, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
-                    cv2.putText(bgr, packet.stream_name, (25, 25), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 0))
-                    cv2.putText(bgr, "fps: " + str(frame_count_prev[window_name]), (25, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 0))
-                    cv2.imshow("color", bgr)
-
-                elif packet.stream_name == 'meta_d2h':
-                    str_ = packet.getDataAsStr()
-                    dict_ = json.loads(str_)
-
-                    print('meta_d2h Temp',
-                          ' CSS:' + '{:6.2f}'.format(dict_['sensors']['temperature']['css']),
-                          ' MSS:' + '{:6.2f}'.format(dict_['sensors']['temperature']['mss']),
-                          ' UPA:' + '{:6.2f}'.format(dict_['sensors']['temperature']['upa0']),
-                          ' DSS:' + '{:6.2f}'.format(dict_['sensors']['temperature']['upa1']))
-                elif packet.stream_name == 'object_tracker':
-                    tracklets = packet.getObjectTracker()
-
-                frame_count[window_name] += 1
-
-            t_curr = time()
-            if t_start + 1.0 < t_curr:
-                t_start = t_curr
-                # print("metaout fps: " + str(frame_count_prev["metaout"]))
-
-                stream_windows = []
-                for s in stream_names:
-                    if s == 'previewout':
-                        for cam in NN_cams:
-                            stream_windows.append(s + '-' + cam)
-                            frame_count_prev['nn'][cam] = frame_count['nn'][cam]
-                            frame_count['nn'][cam] = 0
-                    else:
-                        stream_windows.append(s)
-                for w in stream_windows:
-                    frame_count_prev[w] = frame_count[w]
-                    frame_count[w] = 0
+            if log_out:
+                logs = log_out.tryGetAll()
+                for log in logs:
+                    print_sys_info(log)
 
             key = cv2.waitKey(1)
             if key == ord('q'):
                 break
-            else:
-                keypress_handler(self, key, stream_names)
+            elif key == ord('m'):
+                next_filter = next(median_filters)
+                pm.update_depth_config(device, median=next_filter)
 
-        del p  # in order to stop the pipeline object should be deleted, otherwise device will continue working. This is required if you are going to add code after the main loop, otherwise you can ommit it.
-        del self.device
-        cv2.destroyAllWindows()
+            
+    finally:
+        if conf.useCamera and enc_manager is not None:
+            enc_manager.close()
 
-        # Close video output file if was opened
-        if video_file is not None:
-            video_file.close()
+if conf.args.report_file:
+    report_file.close()
 
-        print('py: DONE.')
-
-
-if __name__ == "__main__":
-    dai = DepthAI()
-    dai.startLoop()
+fps.print_status()
+callbacks.on_teardown(**locals())

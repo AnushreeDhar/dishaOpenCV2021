@@ -3,7 +3,22 @@ import cv2
 import numpy as np
 from time import time
 import json
+import math
+
+from io import BytesIO
 import depthai
+import gtts
+import pyttsx3 #offline
+import speech_recognition as sr
+from playsound import playsound
+
+import sys
+import keyboard
+
+from openal import *
+import time
+import msvcrt
+import os
 
 class YoloParams:
     # ------------------------------------------- Extracting layer parameters ------------------------------------------
@@ -204,6 +219,9 @@ TEXT_COLOR = (255, 255, 255)   # white text
 TEXT_FONT = cv2.FONT_HERSHEY_SIMPLEX
 
 def show_tiny_yolo(filtered_objects, frame, **kwargs):
+    objects_found = []
+    objectsDetected = []
+    
     NN_metadata = kwargs['NN_json']
     labels = NN_metadata['mappings']['labels']
     config = kwargs['config']
@@ -217,7 +235,7 @@ def show_tiny_yolo(filtered_objects, frame, **kwargs):
         ymax = detection['ymax']
         confidence = detection['confidence']
         class_id = detection['class_id']
-       
+        
         # Set up the text for display
         cv2.rectangle(frame,(xmin, ymin), (xmax, ymin+20), LABEL_BG_COLOR, -1)
         cv2.putText(frame, labels[class_id] + ': %.2f' % confidence, (xmin+5, ymin+15), TEXT_FONT, 0.5, TEXT_COLOR, 1)
@@ -227,7 +245,167 @@ def show_tiny_yolo(filtered_objects, frame, **kwargs):
             depth_x = detection['depth_x']
             depth_y = detection['depth_y']
             depth_z = detection['depth_z']
-            cv2.putText(frame, 'x:' '{:7.3f}'.format(depth_x) + ' m', (xmin, ymin+60),  TEXT_FONT, 0.5, TEXT_COLOR)
-            cv2.putText(frame, 'y:' '{:7.3f}'.format(depth_y) + ' m', (xmin, ymin+80),  TEXT_FONT, 0.5, TEXT_COLOR)
-            cv2.putText(frame, 'z:' '{:7.3f}'.format(depth_z) + ' m', (xmin, ymin+100), TEXT_FONT, 0.5, TEXT_COLOR)
+
+            # print("hello-----------")
+            # print("values for ", labels[class_id], " is ", depth_x, depth_y, depth_z )
+            objects_found.append(labels[class_id])
+
+            objectsDetected.append([labels[class_id], depth_x, depth_y, depth_z])
+            navigation(objectsDetected)
+            # textToSpeech(objects_found, depth_z)
+            cv2.putText(frame, 'x Current:' '{:7.3f}'.format(depth_x) + ' m', (xmin, ymin+60),  TEXT_FONT, 0.5, TEXT_COLOR)
+            cv2.putText(frame, 'y Current:' '{:7.3f}'.format(depth_y) + ' m', (xmin, ymin+80),  TEXT_FONT, 0.5, TEXT_COLOR)
+            cv2.putText(frame, 'z Current:' '{:7.3f}'.format(depth_z) + ' m', (xmin, ymin+100), TEXT_FONT, 0.5, TEXT_COLOR)
     return frame
+
+r = sr.Recognizer()
+engine = pyttsx3.init()
+volume = engine.getProperty('volume')
+engine.setProperty('volume', volume + 1.50)
+
+
+
+def navigation (details):
+    print("details----", details)
+    source_01 = details[1:]
+    source_02 = [3,3,4]
+    #------ detect bottle with x y z position
+    #sound program 
+    # source_01 = [depth_x]
+
+    source_list = []
+    t_source1_0 = 0
+    t_source2_0 = 0
+
+    # source_01 = [-1,-1,4]
+    # source_02 = [3,3,4]
+
+    
+    initialtime_list = []
+    #finaltime_list = []
+
+    initial = time.time()
+
+    def Play_Beep(source_pos,beep_filename):
+        my_sound = oalOpen(beep_filename)           # source
+        my_sound.set_position(source_pos)
+        my_dest = oalGetListener()               # listener/destination
+        my_dest.move_to([0,0,0])
+        my_sound.play()
+        while my_sound.get_state() == AL_PLAYING:
+            # wait until the file is done playing
+            time.sleep(0.2)
+        del my_sound
+        del my_dest
+        
+    # Manipulate list parameters:
+    oalInit()
+    while True:
+        if source_01 not in source_list:
+            source_list.append(source_01)
+            initialtime_list.append(t_source1_0)
+        if source_02 not in source_list:
+            source_list.append(source_02)
+            initialtime_list.append(t_source2_0)
+        
+        t_source1_1 = time.time()
+        t_source2_1 = time.time()
+        finaltime_list = [t_source1_1,t_source2_1]
+        
+
+        # print("source--list---->", source_list)
+        #iterate through all sources
+        index = 0
+        # source_list = set(source_list)
+        for source_object in source_list:
+            # get distance value
+            time_function = 1    # change to a function dependent on distance (exponentially)
+            if finaltime_list[index] - initialtime_list[index] >= time_function:
+                if index<10:
+                    source_index = "_0" + str(index)
+                else:
+                    source_index = "_" + str(index)
+        #             print("filename----", filename)
+                filename = "Beep_frequencies" + os.sep + "Beep" + source_index + ".ogg"
+                Play_Beep(source_object,filename)
+            index+=1
+
+
+            if keyboard.is_pressed('ENTER'):
+                print("you pressed Enter, so exiting program..")
+                sys.exit(0)
+                oalQuit()
+                break
+        source_list = []
+
+
+# for text to speech conversion
+def textToSpeech(label_lists, depth_z):
+    
+    distance = depth_z
+    # voices = engine.getProperty('voices')
+    # for voice in voices:
+    #     print("Voice: %s" % voice.name)
+    #     print("-ID: %s" % voice.id)
+    #     print("-GENDER: %s" % voice.gender)
+    #     print("-LANGUAGES: %s" % voice.languages)
+    #     print("AGE: %s" % voice.age)
+    #     print("\n")
+    
+    # distance = 0
+    # distance = math.sqrt((xmax-xmin)**2 +( ymax-ymin)**2) #euclidean distance
+    # print("distance of object from camera is ", distance, "cm")
+    # mp3fIO = BytesIO()
+    # # print(arr_label, type(arr_label))
+    # for i in range(len(arr_label)):
+    #     print("word", arr_label[i])
+    #     tts = gtts.gTTS(arr_label[i]) #lang='kn'/"bn"
+    #     tts.save("objects detected.mp3")
+    #     # tts.write_to_fp(mp3fIO) 
+    #     playsound("objects detected.mp3")
+    counter = 0
+    while True:
+        counter +=1
+        print('counter', counter)
+        with sr.Microphone() as source:
+            
+            guidanceVoice = "Speak Loud and clear"
+            
+            engine.say(guidanceVoice)
+            engine.runAndWait()
+        # read the audio data from the default microphone
+            audio_data = r.record(source, duration=5)
+            guidanceVoice = "Thank you"
+            engine.say(guidanceVoice)
+            engine.runAndWait()
+            print("Recognizing... speech ")
+            # convert speech to text
+            text = r.recognize_google(audio_data)
+            
+            print(" and searching object from my voice ...... ", text.upper())
+            arr_label = label_lists
+            print(">>>>> objects detected by oak camera >>>> ", arr_label)
+            voice_objects = text.split(" ")
+            print("voice objects are ....", voice_objects)
+
+            for i in range(len(voice_objects)):
+                for j in range(len(arr_label)):
+                    
+                    if voice_objects[i] == arr_label[j]:
+                        guidanceVoice = voice_objects[i] + "can be detected by oak d camera and is at ", distance, "metres away"
+                        engine.say(guidanceVoice)
+                        engine.runAndWait()
+                    else:
+                        pass
+                # if (text in arr_label):
+                #     guidanceVoice = text + "can be detected by oak d camera and is at ", distance, "metres away"
+                #     engine.say(guidanceVoice)
+                #     engine.runAndWait()
+                # else:
+                #     guidanceVoice = "Object cannot be found"
+        #     engine.say(guidanceVoice)
+        #     engine.runAndWait()
+       
+
+
+# >python depthai_demo.py -cnn yolo-v3
