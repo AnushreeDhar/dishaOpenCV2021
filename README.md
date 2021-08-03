@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Gen1 DepthAI API Demo Program
 
 This repo contains demo application, which can load different networks, create pipelines, record video, etc.
@@ -60,3 +61,6 @@ If you run into a problem, please follow the steps below and email support@luxon
 4. Describe the actual running results (what you see after started your script with DepthAI)
 5. How you are using the DepthAI python API (code snippet, for example)
 6. Console output
+=======
+# dishaOpenCV2021
+>>>>>>> f0bd54757463eddfebb1bfd191c86fddad16f642
