@@ -22,6 +22,13 @@ import msvcrt
 import os
 
 
+from io import BytesIO
+import depthai
+import gtts
+import pyttsx3 #offline
+import speech_recognition as sr
+from playsound import playsound
+
 
 import enum
 from depthai_helpers.utils import load_module, frame_norm, to_tensor_result
@@ -32,7 +39,7 @@ filename_list = []
 beep_list = []
 initialtime_list = []
 label_list = []
-old_labels_list = []
+old_label_list = []
 
 
 def convert_disparity_frame(packet, manager=None):
@@ -468,12 +475,17 @@ class NNetManager:
         objects_found = []
         objectsDetected = []
         if self.output_format == "detection":
+            initial_time = time.time()
+
 
 
            
             
             def draw_detection(frame, detection, objectsFoundOnDetection):
-                print("frame----", frame, "detection---", detection, "objectsFound",objectsFoundOnDetection)
+                
+                global source_list, beep_list, distance_list, filename_list, initialtime_list, label_list, old_label_list
+                
+
                 bbox = frame_norm(self.normFrame(frame), [detection.xmin, detection.ymin, detection.xmax, detection.ymax])
                 bbox[::2] += self.cropOffsetX(frame)
                 cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), self.bbox_color[detection.label], 2)
@@ -491,35 +503,65 @@ class NNetManager:
                     print("Distance is ",objectsFoundOnDetection,  x_meters, y_meters, z_meters)
                     
                     objects_found.append([objectsFoundOnDetection, x_meters, y_meters, z_meters])
-                    # navigation(objects_found)
+                    
+                   
+                    def switchTheMode():
+                        with sr.Microphone() as source:
+                            modeVoice = "Enter the mode you wish to find object"
+                            engine.say(modeVoice)
+                            engine.runAndWait()
+                        # read the audio data from the default microphone
+                            audio_mode = r.record(source, duration=5)
+                            print("Recognizing... mode ")
+                            # convert speech to text
+                            print("audio mode------------>", audio_mode)
+                            mode = r.recognize_google(audio_mode)
+                            print("mode is ...", mode)
+                            if 'navigation' in mode:
+                                navigation(objects_found)
+                            elif 'search' in mode:
+                                searchMode(objectsFoundOnDetection, z_meters)
+                            elif 'exit' in mode:
+                                sys.exit()
+                            else:
+                                NoObjvoice = 'No mode was selected'
+                                engine.say(NoObjvoice)
+                                engine.runAndWait()
+                    
 
-                    print("source_list------------", source_list)
-                    # index = 0
-                    # for source_object in source_list:
-                    #     final_time = time.time()
-                    #     time_diff = (final_time - initialtime_list[index]) % 60
-                    #     if time_diff >= Beep_interval:
-                    #         oalInit()
-                    #         my_sound = oalOpen(filename_list[index])           # source
-                    #         my_sound.set_position(source_object)
-                    #         my_dest = oalGetListener()               # listener/destination
-                    #         my_dest.move_to([0,0,0])
-                    #         my_sound.play()
-                    #         while my_sound.get_state() == AL_PLAYING:
-                    #             # wait until the file is done playing
-                    #             time.sleep(0.2)
-                    #         del my_sound
-                    #         del my_dest
-                    #         oalQuit()
-                    #         initialtime_list[index] = final_time  
-                    #     index+=1
-                    # source_list = []
-                    # distance_list = []
-                    # filename_list = []
-                    # beep_list = []
-                    # old_labels_list = []
-                    # for obj in labels_list:
-                    #     old_labels_list.append(obj)
+                    switchTheMode()
+
+
+                    index = 0
+                    for source_object in source_list:
+                        final_time = time.time()
+
+                        
+                        time_diff = (final_time - initialtime_list[index]) % 60
+                        if time_diff >= Beep_interval:
+                            oalInit()
+                            my_sound = oalOpen(filename_list[index])           # source
+                            my_sound.set_position(source_object)
+                            my_dest = oalGetListener()               # listener/destination
+                            my_dest.move_to([0,0,0])
+                            my_sound.play()
+                            while my_sound.get_state() == AL_PLAYING:
+                                # wait until the file is done playing
+                                time.sleep(0.2)
+                            del my_sound
+                            del my_dest
+                            oalQuit()
+                            initialtime_list[index] = final_time 
+                          
+                        index+=1
+                    source_list = []
+                    distance_list = []
+                    filename_list = []
+                    beep_list = []
+                    old_label_list = []
+                    for obj in label_list:
+                        old_label_list.append(obj)
+                    
 
                     cv2.putText(frame, "X: {:.2f} m".format(x_meters), (bbox[0] + 10, bbox[1] + 60),
                                 self.text_type, 0.5, self.text_color)
@@ -528,22 +570,72 @@ class NNetManager:
                     cv2.putText(frame, "Z: {:.2f} m".format(z_meters), (bbox[0] + 10, bbox[1] + 90),
                                 self.text_type, 0.5, self.text_color)
                     
-            
+            r = sr.Recognizer()
+            engine = pyttsx3.init()
+            volume = engine.getProperty('volume')
+            engine.setProperty('volume', volume + 1.50)
+
+# for text to speech conversion
+            def searchMode(label_lists, z_meters):
+                
+                distance = str(round(z_meters, 2))
+                print("distance for search mode----",label_lists, z_meters)
+               
+                counter = 0
+                while True:
+                    counter +=1
+                    print('counter', counter)
+                    with sr.Microphone() as source:
+                        
+                        guidanceVoice = "Speak Loud and clear"
+                        
+                        engine.say(guidanceVoice)
+                        engine.runAndWait()
+                    # read the audio data from the default microphone
+                        audio_data = r.record(source, duration=5)
+                        guidanceVoice = "Thank you"
+                        engine.say(guidanceVoice)
+                        engine.runAndWait()
+                        print("Recognizing... speech ")
+                        # convert speech to text
+                        text = r.recognize_google(audio_data)
+                        
+                        print(" and searching object from my voice ...... ", text.upper())
+                        arr_label = label_lists
+                        print(">>>>> objects detected by oak camera >>>> ", arr_label)
+                        voice_objects = text.split(" ")
+                        print("voice objects are ....", voice_objects)
+
+                        for i in range(len(voice_objects)):
+                            
+                            print("obj------",  voice_objects[i], arr_label )
+                            if voice_objects[i] in arr_label:
+                                guidanceVoice = voice_objects[i] + "can be detected by oak d camera and is at ", distance, "metres away"
+                                engine.say(guidanceVoice)
+                                engine.runAndWait()
+                            elif 'switch' in voice_objects[i]:
+                                return draw_detection
+                            elif 'exit' in voice_objects[i]:
+                                sys.exit() 
+                            else:
+                                pass
+                        
+                            # if (text in arr_label):
+                            #     guidanceVoice = text + "can be detected by oak d camera and is at ", distance, "metres away"
+                            #     engine.say(guidanceVoice)
+                            #     engine.runAndWait()
+                            # else:
+                            #     guidanceVoice = "Object cannot be found"
+                    #     engine.say(guidanceVoice)
+                    #     engine.runAndWait()
+                
 
 
             def navigation (sourceDetected):
 
                 global source_list, beep_list, distance_list, filename_list, initialtime_list, label_list, old_label_list
-                # print("details----", details)
-
-                # for sources in sourceDetected:
-                    
-                #     print("label is", sourceDetected[sources])
-                #     # sourceLabelDetected = sourceDetected[sources][0]
-                #     # source_positions = sourceDetected[sources][1:]
-
+                
                 index = 0
-
                 for sound_source in sourceDetected:
                     source_list.append([sound_source[1:]])
                     label_list.append(sound_source[0])
@@ -554,11 +646,15 @@ class NNetManager:
                     filename = "Beep_frequencies" + os.sep + "Beep" + source_index + ".ogg"
                     filename_list.append(filename)
                     distance1_in_cm = sound_source[-1]*100.0;         #converting to cm
+
+                    print("distance in cm is ",distance1_in_cm )
                     if distance1_in_cm <= 200.0:
                         Beep_interval = 10*math.exp(0.03*distance1_in_cm)/1000
                     else:
                         Beep_interval = 10*math.exp(0.03*200)/1000
+
                     
+                    print("old_label_list---", old_label_list, "initialtime_list[index]", initialtime_list[index])
                     for obj in old_label_list:
                         if label_list[index] != obj:
                             initialtime_list[index] = (time.time())
@@ -575,7 +671,7 @@ class NNetManager:
                         draw_detection(frame, detection, self.get_label_text(detection.label))
                         
                 else:
-                    draw_detection(source, detection)
+                    draw_detection(source, detection, self.get_label_text(detection.label))
 
             if self.count_label is not None:
                 self.draw_count(source, decoded_data)
