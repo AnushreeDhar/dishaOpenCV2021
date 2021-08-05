@@ -301,6 +301,10 @@ with dai.Device(pm.p.getOpenVINOVersion(), device_info, usb2Mode=conf.args.usb_s
                 fps.draw_fps(host_frame)
                 cv2.imshow("host", host_frame)
 
+            # print("Object_details in depthai_demo.py--------------", Object_details)
+            # ADD CODE HERE!!!
+            
+
             if log_out:
                 logs = log_out.tryGetAll()
                 for log in logs:

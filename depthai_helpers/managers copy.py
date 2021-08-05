@@ -173,7 +173,7 @@ class MouseClickTracker:
 
 
 class PreviewManager:
-    def __init__(self, fps=None, display=None, colorMap=cv2.COLORMAP_JET, disp_multiplier=255/96, mouseTracker=False):
+    def __init__(self, fps, display, colorMap=cv2.COLORMAP_JET, disp_multiplier=255/96, mouseTracker=False):
         self.display = display
         self.frames = {}
         self.raw_frames = {}
@@ -266,15 +266,7 @@ class PreviewManager:
                     cv2.circle(frame, point, 3, (255, 255, 255), -1)
                     cv2.putText(frame, str(value), (point[0] + 5, point[1] + 5), cv2.FONT_HERSHEY_TRIPLEX, 0.5, (255, 255, 255))
             return_frame = callback(frame, name)  # Can be None, can be other frame e.g. after copy()
-            # color is for normal image - name
-            # depth for heat map - name
-           
-            
             cv2.imshow(name, return_frame if return_frame is not None else frame)
-            
-        
-        
-
 
     def has(self, name):
         return name in self.frames
@@ -300,7 +292,6 @@ class NNetManager:
     text_type = cv2.FONT_HERSHEY_SIMPLEX
     bbox_color = np.random.random(size=(256, 3)) * 256  # Random Colors for bounding boxes
 
-    
     
 
     def __init__(self, input_size, source, model_dir=None, model_name=None, full_fov=False, flip_detection=False):
@@ -342,17 +333,6 @@ class NNetManager:
 
         if self.input_size is None:
             raise RuntimeError("Unable to determine the nn input size. Please use --cnn_input_size flag to specify it in WxH format: -nn-size <width>x<height>")
-        
-        #Initializing audio for disha
-        self.r = sr.Recognizer()
-        self.engine = pyttsx3.init()
-        volume = self.engine.getProperty('volume')
-        self.engine.setProperty('volume', volume + 1.50)
-        self.objectFoundOnDetection = ''
-        self.x_meters = 0 
-        self.y_meters = 0
-        self.z_meters = 0
-
 
     def normFrame(self, frame):
         if not self.full_fov:
@@ -482,200 +462,15 @@ class NNetManager:
             draw_cnt(source, len(cnt_list))
 
     
-    def switchTheMode(self, source):
-        with sr.Microphone() as sourceMic:
-            modeVoice = "Enter the mode you wish to find object"
-            self.engine.say(modeVoice)
-            self.engine.runAndWait()
-        # read the audio data from the default microphone
-            audio_mode = self.r.record(sourceMic, duration=5)
-            print("Recognizing... mode ")
-            # convert speech to text
-            print("audio mode------------>", audio_mode)
-            mode = self.r.recognize_google(audio_mode)
-            print("mode is ...", mode)
-            if 'navigation' in mode:
-                # with sr.Microphone() as source:
-                #     navVoice = "Please speak out loud the name of object to navigate"
-                #     self.engine.say(navVoice)
-                #     self.engine.runAndWait()
-                # nav_mode= self.r.record(source, duration=5)
-                # recognize_navigationObj = self.r.recognize_google(nav_mode)
-                # obj_list = [recognize_navigationObj, self.objectFoundOnDetection]
-                self.navigation(source)
-                # navigation(objects_found)
-            elif 'search' in mode:
-                self.searchMode(self.objectFoundOnDetection, self.z_meters)
-            elif 'exit' in mode:
-                sys.exit()
-            else:
-                NoObjvoice = 'No mode was selected'
-                self.engine.say(NoObjvoice)
-                self.engine.runAndWait()
-
-    def navigation (self, source):
-        if isinstance(source, PreviewManager):
-            for name, frame in source.frames.items():
-                detected_img = frame
-                # print("detected_img---", detected_img)
-                img_dim = detected_img.shape
-                print("img_dim", img_dim)
-
-                img_grid = []
-                source_pos_list = []
-                height_var = 0
-                new_height = img_dim[0]//3
-                counter = 0
-                for x in range(0,3):
-                    width_var = 0
-                    new_width = img_dim[1]//3
-                    for y in range(0,3):
-                        img_grid.append(detected_img[height_var:new_height-1, width_var:new_width-1])
-                        avg_x = (new_height-height_var)//2
-                #         min_depth = np.min(depthmap_values)
-                #         source_position_list.append([avg_y,avg_x,min_depth])
-                        width_var = new_width
-                        new_width += new_width
-                        # get avg depth map at each source as well
-                #         counter+=1
-                    avg_y = new_height-height_var
-                    height_var = new_height
-                    new_height += new_height
-                
-                # for mini_box in img_grid:
-                #     if z_meteres in mini_box
-                        
-        # detected_img = PreviewManager().show_frames()
-        # print("detected img ", detected_img)
-
-            #obj labels, x y z meters
-            # z_metres = sourceDetected[0][-1]
-            # print("z metres---", z_metres)
-            # source_01 = sourceDetected[0][1:]
-            # print("source_01---", source_01)
-
-            # source_list = []
-            # t_source1_0 = 0
-            # t_source2_0 = 0
-
             
-            # initialtime_list = []
-            
-
-            # initial = time.time()
-        
-            # if source_01 not in source_list:
-            #     source_list.append(source_01)
-            #     initialtime_list.append(t_source1_0)
-            
-            # t_source1_1 = time.time()
-            # t_source2_1 = time.time()
-            # finaltime_list = [t_source1_1] #t_source2_1
-            # index = 0
-            # # source_list = set(source_list)
-            # print("source_list", source_list[0], len(source_list))
-            # for source_object in source_list:
-            #     # get distance value
-
-            #     distance1_in_cm = z_metres*100; #converting to cm
-
-            #     if distance1_in_cm <= 200:
-            #         Beep_interval = 10*math.exp(0.03*distance1_in_cm)/1000
-            #     else:
-            #         Beep_interval = 10*math.exp(0.03*200)/1000
-            #     # time_function = 1    # change to a function dependent on distance (exponentially)
-
-            #     print("Time interval:  ",Beep_interval)
-
-            #     time_diff = (finaltime_list[index] - initialtime_list[index]) % 60
-            #     print("Program time difference:   ", time_diff)
-            #     if (finaltime_list[index] - initialtime_list[index])%60 >= Beep_interval:
-                    
-            #         if index<10:
-            #             source_index = "_0" + str(index)
-            #         else:
-            #             source_index = "_" + str(index)
-            # #             print("filename----", filename)
-            #         filename = "Beep_frequencies" + os.sep + "Beep" + source_index + ".ogg"
-            #         # Play_Beep(source_object,filename)
-
-            #         oalInit()
-            #         my_sound = oalOpen(filename)           # source
-            #         my_sound.set_position(source_object)
-            #         my_dest = oalGetListener()               # listener/destination
-            #         my_dest.move_to([0,0,0])
-            #         my_sound.play()
-            #         while my_sound.get_state() == AL_PLAYING:
-            #             # wait until the file is done playing
-            #             time.sleep(0.2)
-            #         del my_sound
-            #         del my_dest
-            #         oalQuit()
-            #         initialtime_list[index] = time.time()
-            #     index+=1
-            #     source_list = []
-
-    # for text to speech conversion
-    def searchMode(self,label_lists, z_meters):
-        
-        distance = str(round(z_meters, 2))
-        print("distance for search mode----",label_lists, z_meters)
-        counter = 0
-        while True:
-            counter +=1
-            print('counter', counter)
-            with sr.Microphone() as source:
                 
-                guidanceVoice = "Speak Loud and clear"
-                
-                self.engine.say(guidanceVoice)
-                self.engine.runAndWait()
-            # read the audio data from the default microphone
-                audio_data = self.r.record(source, duration=5)
-                guidanceVoice = "Thank you"
-                self.engine.say(guidanceVoice)
-                self.engine.runAndWait()
-                print("Recognizing... speech ")
-                # convert speech to text
-                text = self.r.recognize_google(audio_data)
-                
-                print(" and searching object from my voice ...... ", text.upper())
-                arr_label = label_lists
-                print(">>>>> objects detected by oak camera >>>> ", arr_label)
-                voice_objects = text.split(" ")
-                print("voice objects are ....", voice_objects)
-
-                for i in range(len(voice_objects)):
-                    
-                    print("obj------",  voice_objects[i], arr_label )
-                    if voice_objects[i] in arr_label:
-                        guidanceVoice = voice_objects[i] + "can be detected by oak d camera and is at ", distance, "metres away"
-                        self.engine.say(guidanceVoice)
-                        self.engine.runAndWait()
-                    elif 'switch' in voice_objects[i]:
-                        return draw_detection
-                    elif 'exit' in voice_objects[i]:
-                        sys.exit() 
-                    else:
-                        pass      
-                    
-                            # if (text in arr_label):
-                            #     guidanceVoice = text + "can be detected by oak d camera and is at ", distance, "metres away"
-                            #     self.engine.say(guidanceVoice)
-                            #     self.engine.runAndWait()
-                            # else:
-                            #     guidanceVoice = "Object cannot be found"
-                    #     self.engine.say(guidanceVoice)
-                    #     self.engine.runAndWait()    
 
     def draw(self, source, decoded_data):
         objects_found = []
         objectsDetected = []
         if self.output_format == "detection":
-            def draw_detection(frame, detection):
+            def draw_detection(frame, detection, objectsFoundOnDetection):
                 
-
-                objectFoundOnDetection = self.get_label_text(detection.label)
                 bbox = frame_norm(self.normFrame(frame), [detection.xmin, detection.ymin, detection.xmax, detection.ymax])
                 bbox[::2] += self.cropOffsetX(frame)
                 cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), self.bbox_color[detection.label], 2)
@@ -690,12 +485,44 @@ class NNetManager:
                     y_meters = detection.spatialCoordinates.y / 1000
                     z_meters = detection.spatialCoordinates.z / 1000
 
-                    print("Distance is ",objectFoundOnDetection,  x_meters, y_meters, z_meters)
+                    print("Distance is ",objectsFoundOnDetection,  x_meters, y_meters, z_meters)
                     
-                    objects_found.append([self.objectFoundOnDetection, self.x_meters, self.y_meters, self.z_meters])
+                    objects_found.append([objectsFoundOnDetection, x_meters, y_meters, z_meters])
+                    def switchTheMode():
+                        with sr.Microphone() as source:
+                            modeVoice = "Enter the mode you wish to find object"
+                            engine.say(modeVoice)
+                            engine.runAndWait()
+                        # read the audio data from the default microphone
+                            audio_mode = r.record(source, duration=5)
+                            print("Recognizing... mode ")
+                            # convert speech to text
+                            print("audio mode------------>", audio_mode)
+                            mode = r.recognize_google(audio_mode)
+                            print("mode is ...", mode)
+                            if 'navigation' in mode:
+                                with sr.Microphone() as source:
+                                    navVoice = "Please speak out loud the name of object to navigate"
+                                    engine.say(navVoice)
+                                    engine.runAndWait()
+                                nav_mode= r.record(source, duration=5)
+                                while True:
+                                    # get fresh distance values (x,y,z)
+                                    recognize_navigationObj = r.recognize_google(nav_mode)
+                                    obj_list = [recognize_navigationObj, objectsFoundOnDetection]
+                                    navigation(obj_list)
+                                # navigation(objects_found)
+                            elif 'search' in mode:
+                                searchMode(objectsFoundOnDetection, z_meters)
+                            elif 'exit' in mode:
+                                sys.exit()
+                            else:
+                                NoObjvoice = 'No mode was selected'
+                                engine.say(NoObjvoice)
+                                engine.runAndWait()
                     
-                    
-                    self.switchTheMode(source)
+
+                    switchTheMode()
 
                     cv2.putText(frame, "X: {:.2f} m".format(x_meters), (bbox[0] + 10, bbox[1] + 60),
                                 self.text_type, 0.5, self.text_color)
@@ -703,10 +530,146 @@ class NNetManager:
                                 self.text_type, 0.5, self.text_color)
                     cv2.putText(frame, "Z: {:.2f} m".format(z_meters), (bbox[0] + 10, bbox[1] + 90),
                                 self.text_type, 0.5, self.text_color)
-                # return ([[x_meters, y_meters, z_meters],objectsFoundOnDetection])        
+                return ([[x_meters, y_meters, z_meters],objectsFoundOnDetection])        
+            r = sr.Recognizer()
+            engine = pyttsx3.init()
+            volume = engine.getProperty('volume')
+            engine.setProperty('volume', volume + 1.50)
+        # for text to speech conversion
+            def searchMode(label_lists, z_meters):
+                
+                distance = str(round(z_meters, 2))
+                print("distance for search mode----",label_lists, z_meters)
+                counter = 0
+                while True:
+                    counter +=1
+                    print('counter', counter)
+                    with sr.Microphone() as source:
+                        
+                        guidanceVoice = "Speak Loud and clear"
+                        
+                        engine.say(guidanceVoice)
+                        engine.runAndWait()
+                    # read the audio data from the default microphone
+                        audio_data = r.record(source, duration=5)
+                        guidanceVoice = "Thank you"
+                        engine.say(guidanceVoice)
+                        engine.runAndWait()
+                        print("Recognizing... speech ")
+                        # convert speech to text
+                        text = r.recognize_google(audio_data)
+                        
+                        print(" and searching object from my voice ...... ", text.upper())
+                        arr_label = label_lists
+                        print(">>>>> objects detected by oak camera >>>> ", arr_label)
+                        voice_objects = text.split(" ")
+                        print("voice objects are ....", voice_objects)
+
+                        for i in range(len(voice_objects)):
+                            
+                            print("obj------",  voice_objects[i], arr_label )
+                            if voice_objects[i] in arr_label:
+                                guidanceVoice = voice_objects[i] + "can be detected by oak d camera and is at ", distance, "metres away"
+                                engine.say(guidanceVoice)
+                                engine.runAndWait()
+                            elif 'switch' in voice_objects[i]:
+                                return draw_detection
+                            elif 'exit' in voice_objects[i]:
+                                sys.exit() 
+                            else:
+                                pass
+                        
+                            # if (text in arr_label):
+                            #     guidanceVoice = text + "can be detected by oak d camera and is at ", distance, "metres away"
+                            #     engine.say(guidanceVoice)
+                            #     engine.runAndWait()
+                            # else:
+                            #     guidanceVoice = "Object cannot be found"
+                    #     engine.say(guidanceVoice)
+                    #     engine.runAndWait()
+                
+
+
+            def navigation (sourceDetected):
+               
+
+                #obj labels, x y z meters
+                z_metres = sourceDetected[0][-1]
+                print("z metres---", z_metres)
+                source_01 = sourceDetected[0][1:]
+                print("source_01---", source_01)
+
+                source_list = []
+                t_source1_0 = 0
+                t_source2_0 = 0
+
+                
+                initialtime_list = []
+                
+
+                initial = time.time()
             
+                if source_01 not in source_list:
+                    source_list.append(source_01)
+                    initialtime_list.append(t_source1_0)
+                
+                t_source1_1 = time.time()
+                t_source2_1 = time.time()
+                finaltime_list = [t_source1_1] #t_source2_1
+                index = 0
+                # source_list = set(source_list)
+                print("source_list", source_list[0], len(source_list))
+                for source_object in source_list:
+                    # get distance value
+
+                    distance1_in_cm = z_metres*100; #converting to cm
+
+                    if distance1_in_cm <= 200:
+                        Beep_interval = 10*math.exp(0.03*distance1_in_cm)/1000
+                    else:
+                        Beep_interval = 10*math.exp(0.03*200)/1000
+                    # time_function = 1    # change to a function dependent on distance (exponentially)
+
+                    print("Time interval:  ",Beep_interval)
+
+                    time_diff = (finaltime_list[index] - initialtime_list[index]) % 60
+                    print("Program time difference:   ", time_diff)
+                    if (finaltime_list[index] - initialtime_list[index])%60 >= Beep_interval:
+                        
+                        if index<10:
+                            source_index = "_0" + str(index)
+                        else:
+                            source_index = "_" + str(index)
+                #             print("filename----", filename)
+                        filename = "Beep_frequencies" + os.sep + "Beep" + source_index + ".ogg"
+                        # Play_Beep(source_object,filename)
+
+                        oalInit()
+                        my_sound = oalOpen(filename)           # source
+                        my_sound.set_position(source_object)
+                        my_dest = oalGetListener()               # listener/destination
+                        my_dest.move_to([0,0,0])
+                        my_sound.play()
+                        while my_sound.get_state() == AL_PLAYING:
+                            # wait until the file is done playing
+                            time.sleep(0.2)
+                        del my_sound
+                        del my_dest
+                        oalQuit()
+                        initialtime_list[index] = time.time()
+                    index+=1
+                    source_list = []
+                    # add control to the raspberry pi as a button to stop the oak d camera from detecting
+                    # if keyboard.is_pressed('ENTER'):
+                    #     print("you pressed Enter, so exiting program..")
+                    #     sys.exit(0)
+                    #     oalQuit()
+                    #     # break
+                    
             
+            var1 = []    
             for detection in decoded_data:
+               
                 objectsFoundOnDetection = []
                 if isinstance(source, PreviewManager):
                     for frame in source.frames.values():
@@ -714,11 +677,11 @@ class NNetManager:
 
                         # objectsFoundOnDetection.append(self.get_label_text(detection.label))
                         
-                        draw_detection(frame, detection)
-                        
+                        var1 = draw_detection(frame, detection, self.get_label_text(detection.label))
+                        print("var1 in if--", var1)
                 else:
-                    draw_detection(source, detection)
-                    
+                    var1 =draw_detection(source, detection, self.get_label_text(detection.label))
+                    print("else: var1",var1)
 
 
 
@@ -731,7 +694,8 @@ class NNetManager:
                 frames = [("host", source)]
             self.handler.draw(self, decoded_data, frames)
         # print("var1---", var1)
-        
+        return(var1)
+
 
             
     
