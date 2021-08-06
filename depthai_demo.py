@@ -20,6 +20,14 @@ from depthai_helpers.arg_manager import parse_args
 from depthai_helpers.config_manager import ConfigManager
 from depthai_helpers.utils import frame_norm, to_planar, to_tensor_result, load_module
 
+
+from io import BytesIO
+import depthai
+import gtts
+import pyttsx3 #offline
+import speech_recognition as sr
+from playsound import playsound
+
 DISP_CONF_MIN = int(os.getenv("DISP_CONF_MIN", 0))
 DISP_CONF_MAX = int(os.getenv("DISP_CONF_MAX", 255))
 SIGMA_MIN = int(os.getenv("SIGMA_MIN", 0))
@@ -220,8 +228,39 @@ with dai.Device(pm.p.getOpenVINOVersion(), device_info, usb2Mode=conf.args.usb_s
     nn_data = []
     sbb_rois = []
     callbacks.on_setup(**locals())
+ #Initializing audio for disha
+    r = sr.Recognizer()
+    engine = pyttsx3.init()
+    volume =engine.getProperty('volume')
+    engine.setProperty('volume', volume + 1.50)
+    
 
     try:
+        DISHA_OPERATING_MODE = ""
+        while DISHA_OPERATING_MODE == "":
+            with sr.Microphone() as sourceMic:
+                modeVoice = "Enter the mode you wish to find object"
+                engine.say(modeVoice)
+                engine.runAndWait()
+            # read the audio data from the default microphone
+                audio_mode = r.record(sourceMic, duration=5)
+                print("Recognizing... mode ")
+                # convert speech to text
+                print("audio mode------------>", audio_mode)
+                mode = r.recognize_google(audio_mode)
+                print("mode is ...", mode)
+                
+                if 'navigation' in mode:
+                    DISHA_OPERATING_MODE = 'navigation'
+                    initial_time = time.time()
+                        #condition: if user says "quit" then break
+                elif 'search' in mode:
+                    DISHA_OPERATING_MODE = 'search'
+                    initial_time = time.time()
+                
+
+        nn_manager.disha_mode = DISHA_OPERATING_MODE
+
         while True:
             fps.next_iter()
             callbacks.on_iter(**locals())
@@ -277,7 +316,8 @@ with dai.Device(pm.p.getOpenVINOVersion(), device_info, usb2Mode=conf.args.usb_s
 
             if conf.useCamera:
                 if conf.useNN:
-                    nn_manager.draw(pv, nn_data)
+                    
+                    nn_manager.draw(pv, nn_data, initial_time)
                 fps.draw_fps(pv)
 
                 def show_frames_callback(frame, name):
@@ -297,7 +337,8 @@ with dai.Device(pm.p.getOpenVINOVersion(), device_info, usb2Mode=conf.args.usb_s
                 pv.show_frames(scale=conf.args.scale, callback=show_frames_callback)
             else:
                 if conf.useNN:
-                    nn_manager.draw(host_frame, nn_data)
+
+                    nn_manager.draw(host_frame, nn_data,initial_time)
                 fps.draw_fps(host_frame)
                 cv2.imshow("host", host_frame)
 

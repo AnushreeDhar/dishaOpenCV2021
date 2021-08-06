@@ -268,8 +268,8 @@ class PreviewManager:
             return_frame = callback(frame, name)  # Can be None, can be other frame e.g. after copy()
             # color is for normal image - name
             # depth for heat map - name
-           
-            
+            # print("name is---", name, frame.shape)
+            #single channel image ----> send to navigationMode grayscale monochrome
             cv2.imshow(name, return_frame if return_frame is not None else frame)
             
         
@@ -308,6 +308,7 @@ class NNetManager:
             raise RuntimeError(f"Source {source} is invalid, available {self.source_choices}")
 
         self.input_size = input_size
+        self.disha_mode = ''
         self.full_fov = full_fov
         self.flip_detection = flip_detection
         self.model_name = model_name
@@ -482,139 +483,117 @@ class NNetManager:
             draw_cnt(source, len(cnt_list))
 
     
-    def switchTheMode(self, source):
-        with sr.Microphone() as sourceMic:
-            modeVoice = "Enter the mode you wish to find object"
-            self.engine.say(modeVoice)
-            self.engine.runAndWait()
-        # read the audio data from the default microphone
-            audio_mode = self.r.record(sourceMic, duration=5)
-            print("Recognizing... mode ")
-            # convert speech to text
-            print("audio mode------------>", audio_mode)
-            mode = self.r.recognize_google(audio_mode)
-            print("mode is ...", mode)
-            if 'navigation' in mode:
-                # with sr.Microphone() as source:
-                #     navVoice = "Please speak out loud the name of object to navigate"
-                #     self.engine.say(navVoice)
-                #     self.engine.runAndWait()
-                # nav_mode= self.r.record(source, duration=5)
-                # recognize_navigationObj = self.r.recognize_google(nav_mode)
-                # obj_list = [recognize_navigationObj, self.objectFoundOnDetection]
-                self.navigation(source)
-                # navigation(objects_found)
-            elif 'search' in mode:
-                self.searchMode(self.objectFoundOnDetection, self.z_meters)
-            elif 'exit' in mode:
-                sys.exit()
-            else:
-                NoObjvoice = 'No mode was selected'
-                self.engine.say(NoObjvoice)
-                self.engine.runAndWait()
+   
 
-    def navigation (self, source):
+    def navigationMode (self, source,initial_time):
+        initialtime_list = []
+        for i in range(0,9):
+            initialtime_list.append(initial_time)
         if isinstance(source, PreviewManager):
             for name, frame in source.frames.items():
-                detected_img = frame
+                detected_img_color = frame
+                detected_img_gray = cv2.cvtColor(detected_img_color, cv2.COLOR_BGR2GRAY)
+                # img = cv2.imread('D:/image-1.png', cv2.IMREAD_GRAYSCALE)
                 # print("detected_img---", detected_img)
-                img_dim = detected_img.shape
-                print("img_dim", img_dim)
-
+                img_dim = detected_img_gray.shape
+                # cv2.imshow("gray", detected_img_gray)
+                # print("img_dim", img_dim)
                 img_grid = []
-                source_pos_list = []
-                height_var = 0
-                new_height = img_dim[0]//3
-                counter = 0
-                for x in range(0,3):
-                    width_var = 0
-                    new_width = img_dim[1]//3
-                    for y in range(0,3):
-                        img_grid.append(detected_img[height_var:new_height-1, width_var:new_width-1])
-                        avg_x = (new_height-height_var)//2
-                #         min_depth = np.min(depthmap_values)
-                #         source_position_list.append([avg_y,avg_x,min_depth])
-                        width_var = new_width
-                        new_width += new_width
-                        # get avg depth map at each source as well
-                #         counter+=1
-                    avg_y = new_height-height_var
-                    height_var = new_height
-                    new_height += new_height
-                
-                # for mini_box in img_grid:
-                #     if z_meteres in mini_box
-                        
-        # detected_img = PreviewManager().show_frames()
-        # print("detected img ", detected_img)
-
-            #obj labels, x y z meters
-            # z_metres = sourceDetected[0][-1]
-            # print("z metres---", z_metres)
-            # source_01 = sourceDetected[0][1:]
-            # print("source_01---", source_01)
-
-            # source_list = []
-            # t_source1_0 = 0
-            # t_source2_0 = 0
-
-            
-            # initialtime_list = []
-            
-
-            # initial = time.time()
-        
-            # if source_01 not in source_list:
-            #     source_list.append(source_01)
-            #     initialtime_list.append(t_source1_0)
-            
-            # t_source1_1 = time.time()
-            # t_source2_1 = time.time()
-            # finaltime_list = [t_source1_1] #t_source2_1
-            # index = 0
-            # # source_list = set(source_list)
-            # print("source_list", source_list[0], len(source_list))
-            # for source_object in source_list:
-            #     # get distance value
-
-            #     distance1_in_cm = z_metres*100; #converting to cm
-
-            #     if distance1_in_cm <= 200:
-            #         Beep_interval = 10*math.exp(0.03*distance1_in_cm)/1000
-            #     else:
-            #         Beep_interval = 10*math.exp(0.03*200)/1000
-            #     # time_function = 1    # change to a function dependent on distance (exponentially)
-
-            #     print("Time interval:  ",Beep_interval)
-
-            #     time_diff = (finaltime_list[index] - initialtime_list[index]) % 60
-            #     print("Program time difference:   ", time_diff)
-            #     if (finaltime_list[index] - initialtime_list[index])%60 >= Beep_interval:
+                if img_dim[0] == 400 and img_dim[1] == 640:
+                    source_pos_list = []
+                    height_var = 0
+                    new_height = img_dim[0]//3
+                    counter = 0
+                    for x in range(0,3):
+                        width_var = 0
+                        new_width = img_dim[1]//3
+                        for y in range(0,3):
+                            img_grid.append(detected_img_gray[height_var:new_height-1, width_var:new_width-1])
+                            avg_x = (new_height-height_var)//2
+                    #         min_depth = np.min(depthmap_values)
+                    #         source_position_list.append([avg_y,avg_x,min_depth])
+                            width_var = new_width
+                            new_width += new_width
+                            # get avg depth map at each source as well
+                    #         counter+=1
+                        avg_y = new_height-height_var
+                        height_var = new_height
+                        new_height += new_height
                     
-            #         if index<10:
-            #             source_index = "_0" + str(index)
-            #         else:
-            #             source_index = "_" + str(index)
-            # #             print("filename----", filename)
-            #         filename = "Beep_frequencies" + os.sep + "Beep" + source_index + ".ogg"
-            #         # Play_Beep(source_object,filename)
+                min_positions = []
+                max_pixelValues = []
+                # filename_list = []
+                i=0
+                for mini_box in img_grid:
+                    max_pixelValues.append(np.max(mini_box))
+                    min_positions.append(255-max_pixelValues[i])
+                    
+                    # if i<10:
+                    #     source_index = "_0" + str(i)
+                    # else:
+                    #     source_index = "_" + str(i)
+                    # filename = "Beep_frequencies" + os.sep + "Beep" + source_index + ".ogg"
+                    # filename_list.append(filename)
+                    
+                    i+=1
 
-            #         oalInit()
-            #         my_sound = oalOpen(filename)           # source
-            #         my_sound.set_position(source_object)
-            #         my_dest = oalGetListener()               # listener/destination
-            #         my_dest.move_to([0,0,0])
-            #         my_sound.play()
-            #         while my_sound.get_state() == AL_PLAYING:
-            #             # wait until the file is done playing
-            #             time.sleep(0.2)
-            #         del my_sound
-            #         del my_dest
-            #         oalQuit()
-            #         initialtime_list[index] = time.time()
-            #     index+=1
-            #     source_list = []
-
+                index=0
+                right_side_frame = [2,5,8]
+                left_side_frame = [0,3,6]
+                middle_frame = [1,4,7]
+                for distance_in_cm in min_positions:
+                    
+                    if distance_in_cm <= 200:
+                        Beep_interval = 10*math.exp(0.03*distance_in_cm)/10000
+                    else:
+                        Beep_interval = 10*math.exp(0.03*200)/10000
+                    print("Beep_interval --------:  ",Beep_interval)
+                    final_time = time.time()
+                    time_diff = (final_time - initialtime_list[index]) % 60
+                    print("time difference---------", time_diff)
+                    if time_diff >= Beep_interval:
+                        oalInit()
+                        filename = "Beep_frequencies" + os.sep + "Beep_04.ogg"
+                        my_sound = oalOpen(filename)           # source
+                        # my_sound.set_position([0,0,10*math.exp(0.03*max_pixelValues[index])])
+                        if index in right_side_frame:
+                            my_sound.set_position([0.2,0.2,(distance_in_cm)])
+                            my_dest = oalGetListener()               # listener/destination
+                            my_dest.move_to([0,0,0])
+                            my_sound.play()
+                            while my_sound.get_state() == AL_PLAYING:
+                                # wait until the file is done playing
+                                time.sleep(0.2)
+                            del my_sound
+                            del my_dest
+                            oalQuit()
+                            initialtime_list[index] = time.time()
+                        elif index in left_side_frame:
+                            my_sound.set_position([-0.2,-0.2,(-distance_in_cm)])
+                            my_dest = oalGetListener()               # listener/destination
+                            my_dest.move_to([0,0,0])
+                            my_sound.play()
+                            while my_sound.get_state() == AL_PLAYING:
+                                # wait until the file is done playing
+                                time.sleep(0.2)
+                            del my_sound
+                            del my_dest
+                            oalQuit()
+                            initialtime_list[index] = time.time()
+                        else:
+                            my_sound.set_position([0.2,-0.2,(distance_in_cm)])
+                            my_dest = oalGetListener()               # listener/destination
+                            my_dest.move_to([0,0,0])
+                            my_sound.play()
+                            while my_sound.get_state() == AL_PLAYING:
+                                # wait until the file is done playing
+                                time.sleep(0.2)
+                            del my_sound
+                            del my_dest
+                            oalQuit()
+                            initialtime_list[index] = time.time()
+                        index+=1
+                    
     # for text to speech conversion
     def searchMode(self,label_lists, z_meters):
         
@@ -622,8 +601,7 @@ class NNetManager:
         print("distance for search mode----",label_lists, z_meters)
         counter = 0
         while True:
-            counter +=1
-            print('counter', counter)
+
             with sr.Microphone() as source:
                 
                 guidanceVoice = "Speak Loud and clear"
@@ -653,22 +631,15 @@ class NNetManager:
                         self.engine.say(guidanceVoice)
                         self.engine.runAndWait()
                     elif 'switch' in voice_objects[i]:
-                        return draw_detection
+                        self.disha_mode = 'navigation'
+                        return draw_detection()
                     elif 'exit' in voice_objects[i]:
                         sys.exit() 
                     else:
                         pass      
-                    
-                            # if (text in arr_label):
-                            #     guidanceVoice = text + "can be detected by oak d camera and is at ", distance, "metres away"
-                            #     self.engine.say(guidanceVoice)
-                            #     self.engine.runAndWait()
-                            # else:
-                            #     guidanceVoice = "Object cannot be found"
-                    #     self.engine.say(guidanceVoice)
-                    #     self.engine.runAndWait()    
 
-    def draw(self, source, decoded_data):
+
+    def draw(self, source, decoded_data, initial_time=None):
         objects_found = []
         objectsDetected = []
         if self.output_format == "detection":
@@ -694,9 +665,11 @@ class NNetManager:
                     
                     objects_found.append([self.objectFoundOnDetection, self.x_meters, self.y_meters, self.z_meters])
                     
+                    if self.disha_mode == 'navigation':
+                        self.navigationMode(source,initial_time)
+                    elif self.disha_mode == 'search':
+                        self.searchMode(objectFoundOnDetection, z_meters)
                     
-                    self.switchTheMode(source)
-
                     cv2.putText(frame, "X: {:.2f} m".format(x_meters), (bbox[0] + 10, bbox[1] + 60),
                                 self.text_type, 0.5, self.text_color)
                     cv2.putText(frame, "Y: {:.2f} m".format(y_meters), (bbox[0] + 10, bbox[1] + 75),
@@ -707,12 +680,9 @@ class NNetManager:
             
             
             for detection in decoded_data:
-                objectsFoundOnDetection = []
+                
                 if isinstance(source, PreviewManager):
                     for frame in source.frames.values():
-                        # print("values for ", self.get_label_text(detection.label) )
-
-                        # objectsFoundOnDetection.append(self.get_label_text(detection.label))
                         
                         draw_detection(frame, detection)
                         
